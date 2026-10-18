@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plugin Editor</title>
+<!-- The window's theme (data-theme), Refresh and selection: browser-pane's client. -->
+<script src="/bp/client.js"></script>
+<link rel="stylesheet" href="api/tailwind.css">
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
+<div class="flex h-screen flex-col">
+
+  <header class="border-b border-slate-200 bg-white px-4 pt-3 dark:border-slate-800 dark:bg-slate-900">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h1 class="text-base font-semibold tracking-tight">Plugin Editor</h1>
+      <div class="flex items-center gap-2">
+        <span id="summary" class="text-xs text-slate-500 dark:text-slate-400"></span>
+      </div>
+    </div>
+    <div role="tablist" aria-label="View" class="mt-3 flex gap-1">
+      <button role="tab" data-tab="plugins" class="tab -mb-px border-b-2 px-4 py-2 text-sm font-medium">Plugins</button>
+      <button role="tab" data-tab="marketplaces" class="tab -mb-px border-b-2 px-4 py-2 text-sm font-medium">Marketplaces</button>
+    </div>
+  </header>
+
+  <div class="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-2 dark:border-slate-800">
+    <div role="group" aria-label="Filter" class="inline-flex overflow-hidden rounded-md border border-slate-300 text-xs dark:border-slate-700">
+      <button data-filter="installed" class="filter px-3 py-1.5 hover:bg-slate-200 dark:hover:bg-slate-800">Installed</button>
+      <button data-filter="all" class="filter border-x border-slate-300 px-3 py-1.5 hover:bg-slate-200 dark:border-slate-700 dark:hover:bg-slate-800">All</button>
+      <button data-filter="available" class="filter px-3 py-1.5 hover:bg-slate-200 dark:hover:bg-slate-800">Available</button>
+    </div>
+    <input id="search" type="search" placeholder="Search…" aria-label="Search"
+      class="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900">
+    <button id="expandAll" class="btn">Expand all</button>
+    <button id="collapseAll" class="btn">Collapse all</button>
+    <button id="addMp" class="btn btn-primary" hidden>Add marketplace…</button>
+  </div>
+
+  <main class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(280px,5fr)_7fr]">
+    <nav aria-label="Tree" class="min-h-0 overflow-y-auto border-slate-200 p-2 md:border-r dark:border-slate-800">
+      <div id="tree" role="tree" class="text-sm"></div>
+      <p id="treeEmpty" class="py-10 text-center text-sm text-slate-400 dark:text-slate-500" hidden>Nothing matches.</p>
+    </nav>
+    <section id="detail" aria-live="polite" class="min-h-0 overflow-y-auto p-4"></section>
+  </main>
+</div>
+
+<div id="toast" class="fixed right-4 bottom-4 z-20 hidden max-w-md rounded-lg border bg-white p-3 text-sm shadow-lg dark:bg-slate-900" role="status"></div>
+
+<dialog id="mpDialog" class="m-auto w-[min(28rem,92vw)] rounded-xl border border-slate-300 bg-white p-4 text-slate-900 backdrop:bg-black/40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+  <form method="dialog" id="mpForm" class="space-y-3">
+    <h2 class="text-base font-semibold">Add marketplace</h2>
+    <label class="block text-xs text-slate-500 dark:text-slate-400">Source — owner/repo, git or https URL, or a local path
+      <input id="mpSource" required class="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" placeholder="anthropics/claude-plugins-official">
+    </label>
+    <label class="block text-xs text-slate-500 dark:text-slate-400">Scope
+      <select id="mpScope" class="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+        <option>user</option><option>project</option><option>local</option>
+      </select>
+    </label>
+    <div class="flex justify-end gap-2">
+      <button type="button" id="mpCancel" class="btn">Cancel</button>
+      <button type="submit" class="btn btn-primary">Add</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id)
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
+// ---------- state ----------
+const S = {
+  data: null, error: null, tab: 'plugins', filter: 'installed', q: '', busy: false,
+  expanded: { plugins: new Set(), marketplaces: new Set() },
+  selected: { plugins: null, marketplaces: null },
+  details: {},
+}
+try {
+  const saved = JSON.parse(localStorage.getItem('ui') || '{}')
+  if (saved.tab === 'plugins' || saved.tab === 'marketplaces') S.tab = saved.tab
+} catch (e) {}
+const persist = () => { try { localStorage.setItem('ui', JSON.stringify({ tab: S.tab })) } catch (e) {} }
+
+// ---------- data ----------
+async function load() {
+  try {
+    const r = await fetch('api/state', { cache: 'no-store' })
+    const j = await r.json()
+    if (!r.ok) throw new Error(j.error || r.statusText)
+    S.data = j
+    S.error = null
+  } catch (e) {
+    S.error = String(e.message || e)
+  }
+  render()
+}
+
+async function act(payload, label) {
+  if (S.busy) return
+  S.busy = true
+  render()
+  toast('Running: ' + label + '…', 'info', true)
+  let res
+  try {
+    const r = await fetch('api/action', { method: 'POST', body: JSON.stringify(payload) })
+    res = await r.json()
+  } catch (e) {
+    res = { ok: false, text: String(e) }
+  }
+  S.busy = false
+  const note = res.ok && payload.plugin ? '\nRestart Claude Code or run /reload-plugins to apply.' : ''
+  toast(label + (res.ok ? ' — done' : ' — failed') + '\n' + (res.text || '').slice(0, 800) + note, res.ok ? 'ok' : 'err')
+  S.details = {}
+  await load()
+}
+
+let toastTimer
+function toast(text, kind, sticky) {
+  const el = $('toast')
+  el.className = 'fixed right-4 bottom-4 z-20 max-w-md rounded-lg border p-3 text-sm whitespace-pre-wrap shadow-lg ' +
+    (kind === 'ok' ? 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
+      : kind === 'err' ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200'
+      : 'border-slate-300 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200')
+  el.textContent = text
+  clearTimeout(toastTimer)
+  if (!sticky) toastTimer = setTimeout(() => el.classList.add('hidden'), kind === 'err' ? 12000 : 6000)
+}
+$('toast').addEventListener('click', () => $('toast').classList.add('hidden'))
+
+// ---------- tree model ----------
+const matchesFilter = p => S.filter === 'all' || (S.filter === 'installed' ? p.installed : !p.installed)
+const matchesSearch = p => {
+  if (!S.q) return true
+  const q = S.q.toLowerCase()
+  return p.name.toLowerCase().includes(q) || p.marketplace.toLowerCase().includes(q) || p.description.toLowerCase().includes(q)
+}
+const visiblePlugins = () => S.data.plugins.filter(p => matchesFilter(p) && matchesSearch(p))
+
+function buildRoots() {
+  const vis = visiblePlugins()
+  if (S.tab === 'plugins') {
+    const by = new Map()
+    for (const p of vis) (by.get(p.name) ?? by.set(p.name, []).get(p.name)).push(p)
+    return [...by.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, list]) => ({
+      key: 'p:' + name, kind: 'plugin', label: name, plugins: list,
+      children: list.sort((a, b) => a.marketplace.localeCompare(b.marketplace)).map(p => ({ key: 'e:' + p.id, kind: 'entry', p, label: p.marketplace })),
+    }))
+  }
+  const by = new Map()
+  for (const p of vis) (by.get(p.marketplace) ?? by.set(p.marketplace, []).get(p.marketplace)).push(p)
+  return S.data.marketplaces
+    .map(m => ({ m, list: (by.get(m.name) ?? []).sort((a, b) => a.name.localeCompare(b.name)) }))
+    .filter(({ m, list }) => list.length > 0 || (S.filter === 'all' && (!S.q || m.name.toLowerCase().includes(S.q.toLowerCase()))))
+    .sort((a, b) => a.m.name.localeCompare(b.m.name))
+    .map(({ m, list }) => ({
+      key: 'm:' + m.name, kind: 'marketplace', label: m.name, m, plugins: list,
+      children: list.map(p => ({ key: 'e:' + p.id, kind: 'entry', p, label: p.name })),
+    }))
+}
+
+let rows = [] // flat visible rows, for keyboard navigation
+
+function badge(text, cls) {
+  return `<span class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${cls}">${esc(text)}</span>`
+}
+const B_ON = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+const B_OFF = 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+const B_AV = 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+
+function entryBadge(p) {
+  return p.installed ? (p.enabled ? badge('enabled', B_ON) : badge('disabled', B_OFF)) : badge('available', B_AV)
+}
+
+function renderTree() {
+  const roots = buildRoots()
+  const forced = S.q && !S.noForce && roots.length <= 300
+  const open = S.expanded[S.tab]
+  rows = []
+  let html = ''
+  for (const r of roots) {
+    const hasKids = r.children.length > 0
+    const isOpen = hasKids && (forced || open.has(r.key))
+    rows.push({ key: r.key, parent: null, hasKids, isOpen })
+    const nInst = r.plugins.filter(p => p.installed).length
+    const meta = r.kind === 'plugin'
+      ? (nInst ? badge(nInst + ' installed', B_ON) : '') + `<span class="shrink-0 text-xs text-slate-400">${r.children.length} mkt</span>`
+      : badge(nInst + '/' + r.plugins.length + ' installed', nInst ? B_ON : B_AV) + (r.m.configured ? '' : badge('built-in', B_AV))
+    html += rowHtml(r, 1, hasKids, isOpen, meta)
+    if (isOpen) for (const c of r.children) {
+      rows.push({ key: c.key, parent: r.key, hasKids: false, isOpen: false })
+      html += rowHtml(c, 2, false, false, entryBadge(c.p))
+    }
+  }
+  // Background renders (health results, refresh) must not steal keyboard focus from the tree.
+  const focusKey = $('tree').contains(document.activeElement) ? document.activeElement.closest('[data-key]')?.dataset.key : null
+  $('tree').innerHTML = html
+  if (focusKey) $('tree').querySelector(`[data-key="${CSS.escape(focusKey)}"]`)?.focus()
+  $('treeEmpty').hidden = roots.length > 0
+  const sel = S.selected[S.tab]
+  if (sel) { const el = $('tree').querySelector(`[data-key="${CSS.escape(sel)}"]`); if (el) el.scrollIntoView({ block: 'nearest' }) }
+}
+
+function rowHtml(n, level, hasKids, isOpen, meta) {
+  const sel = S.selected[S.tab] === n.key
+  return `<div role="treeitem" aria-level="${level}" aria-selected="${sel}" ${hasKids ? `aria-expanded="${isOpen}"` : ''} data-key="${esc(n.key)}" tabindex="${sel ? 0 : -1}"
+    class="row flex cursor-pointer items-center gap-1.5 rounded-md py-1 pr-2 ${level === 2 ? 'pl-8' : 'pl-1'} ${sel ? 'bg-sky-100 dark:bg-sky-950' : 'hover:bg-slate-200/70 dark:hover:bg-slate-800/70'}">
+    <span data-chev class="inline-flex size-5 shrink-0 items-center justify-center text-slate-400 ${hasKids ? '' : 'invisible'}">${isOpen ? '▾' : '▸'}</span>
+    <span class="min-w-0 flex-1 truncate ${level === 1 ? 'font-medium' : ''}">${esc(n.label)}</span>${meta}</div>`
+}
+
+// ---------- detail ----------
+function kv(rowsArr) {
+  return '<dl class="mt-4 grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-sm">' +
+    rowsArr.filter(r => r[1] !== undefined && r[1] !== '' && r[1] !== null).map(([k, v, raw]) =>
+      `<dt class="text-slate-500 dark:text-slate-400">${esc(k)}</dt><dd class="min-w-0 break-words">${raw ? v : esc(v)}</dd>`).join('') + '</dl>'
+}
+const tilde = p => (p && S.data?.home && (p === S.data.home || p.startsWith(S.data.home + '/'))) ? '~' + p.slice(S.data.home.length) : p
+const when = s => s ? new Date(s).toLocaleString() : ''
+const srcText = s => !s ? '' : typeof s === 'string' ? s : s.repo ?? s.url ?? s.path ?? JSON.stringify(s)
+const btnAct = (act, attrs, label, cls = '') => `<button class="btn ${cls}" data-act="${act}" ${attrs} ${S.busy ? 'disabled' : ''}>${esc(label)}</button>`
+
+function entryActions(p) {
+  const id = `data-id="${esc(p.id)}"`
+  if (!p.installed) return `<select data-scope class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"><option>user</option><option>project</option><option>local</option></select>` + btnAct('install', id, 'Install', 'btn-primary')
+  return btnAct(p.enabled ? 'disable' : 'enable', id, p.enabled ? 'Disable' : 'Enable') + btnAct('update', id, 'Update') + btnAct('uninstall', id, 'Uninstall', 'btn-danger')
+}
+
+function pluginEntryDetail(p) {
+  const d = S.details[p.name]
+  return `<h2 class="text-lg font-semibold">${esc(p.name)} <span class="text-sm font-normal text-slate-500">${esc(p.version ?? '')}</span></h2>
+    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">${esc(p.description) || '<span class="text-slate-400">No description.</span>'}</p>
+    <div class="mt-3 flex flex-wrap items-center gap-2">${entryActions(p)}</div>
+    ${kv([
+      ['ID', p.id], ['Marketplace', p.marketplace],
+      ['Status', p.installed ? (p.enabled ? 'Installed, enabled' : 'Installed, disabled') : 'Available'],
+      ['Scope', p.scope], ['Installs', p.installCount?.toLocaleString()],
+      ['Installed', when(p.installedAt)], ['Updated', when(p.lastUpdated)],
+      ['Install path', tilde(p.installPath)], ['Dev folder', tilde(p.readFromFolder)],
+      ['Source', tilde(srcText(p.source))], ['Options', p.hasUserConfig ? 'Has user options (/plugin configure)' : ''],
+    ])}
+    <div class="mt-5">
+      ${btnAct('inventory', `data-name="${esc(p.name)}"`, d ? 'Reload component inventory' : 'Show component inventory')}
+      ${d ? `<pre class="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-3 text-xs dark:border-slate-800 dark:bg-slate-900">${esc(d)}</pre>` : ''}
+    </div>`
+}
+
+function pluginRootDetail(name) {
+  const list = S.data.plugins.filter(p => p.name === name).sort((a, b) => a.marketplace.localeCompare(b.marketplace))
+  const desc = list.find(p => p.description)?.description
+  return `<h2 class="text-lg font-semibold">${esc(name)}</h2>
+    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">${esc(desc) || '<span class="text-slate-400">No description.</span>'}</p>
+    <h3 class="mt-5 text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-400">Offered by ${list.length} marketplace${list.length === 1 ? '' : 's'}</h3>
+    <ul class="mt-2 space-y-2">${list.map(p => `<li class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <button class="font-medium hover:underline" data-goto="e:${esc(p.id)}">${esc(p.marketplace)}</button>
+        <span class="flex items-center gap-1.5">${entryBadge(p)}<span class="text-xs text-slate-400">${esc(p.version ?? '')}</span></span>
+      </div>
+      <div class="mt-2 flex flex-wrap items-center gap-2">${entryActions(p)}</div></li>`).join('')}</ul>`
+}
+
+function marketplaceDetail(name) {
+  const m = S.data.marketplaces.find(x => x.name === name)
+  if (!m) return empty()
+  const list = S.data.plugins.filter(p => p.marketplace === name)
+  const nInst = list.filter(p => p.installed).length
+  return `<h2 class="text-lg font-semibold">${esc(m.name)}</h2>
+    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">${esc(m.description) || '<span class="text-slate-400">No description.</span>'}</p>
+    <div class="mt-3 flex flex-wrap gap-2">
+      ${m.configured ? btnAct('mp-update', `data-name="${esc(m.name)}"`, 'Update') + btnAct('mp-remove', `data-name="${esc(m.name)}"`, 'Remove', 'btn-danger') : '<span class="text-xs text-slate-400">Built-in catalog: it cannot be updated or removed here.</span>'}
+    </div>
+    ${kv([
+      ['Configured', m.configured ? 'Yes' : 'No (built-in)'], ['Source type', m.source], ['Repository', m.repo],
+      ['Path', tilde(m.path)], ['URL', m.url], ['Location', tilde(m.installLocation)], ['Owner', m.owner],
+      ['Last updated', when(m.lastUpdated)],
+      ['Plugins', `${list.length} total — ${nInst} installed, ${list.length - nInst} available`],
+    ])}`
+}
+
+const empty = () => '<p class="py-16 text-center text-sm text-slate-400 dark:text-slate-500">Select an item in the tree to see its details.</p>'
+
+function renderDetail() {
+  const key = S.selected[S.tab]
+  let html = empty()
+  if (key && S.data) {
+    const [kind, ...rest] = key.split(':'), v = rest.join(':')
+    if (kind === 'p') html = pluginRootDetail(v)
+    else if (kind === 'm') html = marketplaceDetail(v)
+    else if (kind === 'e') { const p = S.data.plugins.find(x => x.id === v); html = p ? pluginEntryDetail(p) : empty() }
+  }
+  $('detail').innerHTML = html
+}
+
+// ---------- chrome ----------
+function render() {
+  document.querySelectorAll('.tab').forEach(b => {
+    const on = b.dataset.tab === S.tab
+    b.setAttribute('aria-selected', on)
+    b.className = 'tab -mb-px border-b-2 px-4 py-2 text-sm font-medium ' + (on
+      ? 'border-sky-500 text-sky-700 dark:text-sky-300' : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200')
+  })
+  document.querySelectorAll('.filter').forEach(b => {
+    const on = b.dataset.filter === S.filter
+    b.setAttribute('aria-pressed', on)
+    b.classList.toggle('font-semibold', on)
+    b.classList.toggle('bg-slate-200', on)
+    b.classList.toggle('dark:bg-slate-800', on)
+  })
+  $('addMp').hidden = S.tab !== 'marketplaces'
+  if (S.error) {
+    $('tree').innerHTML = ''
+    $('detail').innerHTML = `<p class="rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200">Could not load: ${esc(S.error)}</p>`
+    return
+  }
+  if (!S.data) {
+    $('tree').innerHTML = ''
+    $('detail').innerHTML = '<p class="py-16 text-center text-sm text-slate-400">Loading plugins…</p>'
+    return
+  }
+  const inst = S.data.plugins.filter(p => p.installed).length
+  $('summary').textContent = `${inst} installed · ${S.data.plugins.length - inst} available · ${S.data.marketplaces.length} marketplaces`
+  renderTree()
+  renderDetail()
+}
+
+// ---------- events ----------
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { S.tab = b.dataset.tab; persist(); render() }))
+document.querySelectorAll('.filter').forEach(b => b.addEventListener('click', () => { S.filter = b.dataset.filter; persist(); render() }))
+let searchTimer
+$('search').addEventListener('input', e => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { S.q = e.target.value.trim(); S.noForce = false; render() }, 120) })
+// The window's Refresh button reloads from the CLI.
+browserPane.onRefresh(() => { if (!S.busy) load() })
+$('expandAll').addEventListener('click', () => { if (!S.data) return; buildRoots().forEach(r => r.children.length && S.expanded[S.tab].add(r.key)); render() })
+$('collapseAll').addEventListener('click', () => { S.expanded[S.tab].clear(); S.noForce = true; render() })
+
+function toggle(key, force) {
+  const set = S.expanded[S.tab]
+  const on = force ?? !set.has(key)
+  on ? set.add(key) : set.delete(key)
+}
+function select(key) { S.selected[S.tab] = key; render(); $('tree').querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus() }
+
+$('tree').addEventListener('click', e => {
+  const row = e.target.closest('[data-key]')
+  if (!row) return
+  const key = row.dataset.key
+  if (e.target.closest('[data-chev]')) { toggle(key); S.selected[S.tab] = key; render(); $('tree').querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus(); return }
+  S.selected[S.tab] = key
+  render()
+  $('tree').querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus()
+})
+$('tree').addEventListener('dblclick', e => {
+  const row = e.target.closest('[data-key]')
+  if (row && !row.dataset.key.startsWith('e:')) { toggle(row.dataset.key); render() }
+})
+$('tree').addEventListener('keydown', e => {
+  const cur = S.selected[S.tab]
+  const i = rows.findIndex(r => r.key === cur)
+  const r = rows[i]
+  const go = n => { if (rows[n]) { e.preventDefault(); select(rows[n].key) } }
+  if (e.key === 'ArrowDown') go(i < 0 ? 0 : i + 1)
+  else if (e.key === 'ArrowUp') go(i < 0 ? 0 : i - 1)
+  else if (e.key === 'Home') go(0)
+  else if (e.key === 'End') go(rows.length - 1)
+  else if (e.key === 'ArrowRight' && r?.hasKids) { e.preventDefault(); if (!r.isOpen) { toggle(r.key, true); render(); $('tree').querySelector(`[data-key="${CSS.escape(r.key)}"]`)?.focus() } else go(i + 1) }
+  else if (e.key === 'ArrowLeft' && r) { e.preventDefault(); if (r.isOpen) { toggle(r.key, false); render(); $('tree').querySelector(`[data-key="${CSS.escape(r.key)}"]`)?.focus() } else if (r.parent) select(r.parent) }
+  else if ((e.key === 'Enter' || e.key === ' ') && r?.hasKids) { e.preventDefault(); toggle(r.key); render(); $('tree').querySelector(`[data-key="${CSS.escape(r.key)}"]`)?.focus() }
+})
+
+$('detail').addEventListener('click', async e => {
+  const go = e.target.closest('[data-goto]')
+  if (go) { S.tab = 'plugins'; S.selected.plugins = go.dataset.goto; const pid = go.dataset.goto.slice(2); const p = S.data.plugins.find(x => x.id === pid); if (p) S.expanded.plugins.add('p:' + p.name); persist(); render(); return }
+  const b = e.target.closest('[data-act]')
+  if (!b || b.disabled) return
+  const { act: a, id, name } = b.dataset
+  const scope = b.parentElement.querySelector('[data-scope]')?.value
+  if (a === 'install') return act({ action: 'install', plugin: id, scope }, 'Install ' + id)
+  if (a === 'uninstall') { if (confirm('Uninstall ' + id + '?')) act({ action: 'uninstall', plugin: id }, 'Uninstall ' + id); return }
+  if (a === 'enable' || a === 'disable') return act({ action: a, plugin: id }, (a === 'enable' ? 'Enable ' : 'Disable ') + id)
+  if (a === 'update') return act({ action: 'update', plugin: id }, 'Update ' + id)
+  if (a === 'mp-update') return act({ action: 'marketplace-update', marketplace: name }, 'Update marketplace ' + name)
+  if (a === 'mp-remove') { if (confirm('Remove marketplace ' + name + '? Plugins installed from it may stop updating.')) act({ action: 'marketplace-remove', marketplace: name }, 'Remove marketplace ' + name); return }
+  if (a === 'inventory') {
+    try { const j = await (await fetch('api/details?name=' + encodeURIComponent(name))).json(); S.details[name] = j.text || '(no output)' } catch (er) { S.details[name] = String(er) }
+    renderDetail()
+  }
+})
+
+$('addMp').addEventListener('click', () => { $('mpSource').value = ''; $('mpDialog').showModal(); $('mpSource').focus() })
+$('mpCancel').addEventListener('click', () => $('mpDialog').close())
+$('mpForm').addEventListener('submit', () => {
+  const source = $('mpSource').value.trim()
+  if (source) act({ action: 'marketplace-add', source, scope: $('mpScope').value }, 'Add marketplace ' + source)
+})
+
+render()
+load()
+</script>
+</body>
+</html>

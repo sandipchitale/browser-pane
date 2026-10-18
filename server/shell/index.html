@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code</title>
+<script>
+  // The window's theme, applied before it paints. Tabs follow it (client.js).
+  try {
+    const mode = localStorage.getItem('browser-pane-theme') || 'system'
+    const dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  } catch {}
+</script>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f6f6f4; --line: #e2e2de; --text: #1f1f1d; --muted: #6b6b66;
+    --accent: #c15f3c; --accent-text: #ffffff; --row-hover: #efeeea; --row-sel: #f3e3db; --warn: #a3412a;
+  }
+  :root[data-theme="dark"] {
+    --bg: #1b1b1a; --panel: #232322; --line: #373735; --text: #ececea; --muted: #9a9a94;
+    --accent: #d9774f; --accent-text: #1b1b1a; --row-hover: #2b2b29; --row-sel: #3a2c25; --warn: #e48a6a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1b1b1a; --panel: #232322; --line: #373735; --text: #ececea; --muted: #9a9a94;
+      --accent: #d9774f; --accent-text: #1b1b1a; --row-hover: #2b2b29; --row-sel: #3a2c25; --warn: #e48a6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; }
+  nav { display: flex; align-items: flex-end; gap: 8px; padding: 6px 10px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+  /* Many tabs scroll sideways; never up and down, which the selected tab's -1px overlap would allow. */
+  #strip { display: flex; align-items: stretch; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  #tools { display: flex; align-items: center; gap: 2px; padding-bottom: 5px; }
+  #tools button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px; padding: 0; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+  #tools button:hover:not(:disabled) { color: var(--text); background: var(--row-hover); border-color: var(--line); }
+  #tools button:disabled { opacity: .35; cursor: default; }
+  #tools svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  #theme { display: flex; gap: 2px; margin-left: 4px; padding-left: 4px; border-left: 1px solid var(--line); }
+  #tools button[aria-pressed="true"] { color: var(--accent); background: var(--bg); border-color: var(--line); }
+  #strip button { font: inherit; color: var(--muted); background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; padding: 7px 14px; cursor: pointer; white-space: nowrap; }
+  #strip button:hover { color: var(--text); background: var(--row-hover); }
+  #strip button[aria-selected="true"] { color: var(--text); background: var(--bg); border-color: var(--line); margin-bottom: -1px; font-weight: 600; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #ended { display: none; padding: 8px 16px; background: var(--row-sel); color: var(--warn); border-bottom: 1px solid var(--line); }
+  body.ended #ended { display: block; }
+  main { flex: 1; min-height: 0; position: relative; }
+  main > section, main > iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: none; }
+  main > .shown { display: block; }
+  #guide { overflow: auto; padding: 28px 32px; }
+  #guide h1 { font-size: 20px; margin: 0 0 6px; }
+  #guide p { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+  #guide a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  #guide a:hover { text-decoration: underline; }
+  #guide ul { list-style: none; margin: 0; padding: 0; max-width: 820px; }
+  #guide li { display: flex; gap: 14px; align-items: center; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; }
+  #guide li.pinned { border-color: var(--accent); }
+  #guide li .name { font-weight: 600; min-width: 160px; }
+  #guide li .desc { color: var(--muted); flex: 1; }
+  #guide li .error { color: var(--warn); flex: 1; }
+  #guide li button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+  #guide li button:hover { background: var(--row-hover); }
+  /* Pins: outlined when not pinned, filled in the accent color when pinned. */
+  #guide li button.pin { display: inline-flex; padding: 4px; border-color: transparent; background: transparent; color: var(--muted); }
+  #guide li button.pin:hover { border-color: var(--line); color: var(--text); }
+  #guide li button.pin[aria-pressed="true"] { color: var(--accent); }
+  .pin svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .pin[aria-pressed="true"] svg, #strip .pin svg { fill: currentColor; }
+  #strip .pin { display: inline-flex; vertical-align: -2px; margin-right: 5px; color: var(--accent); }
+  #strip .pin svg { width: 12px; height: 12px; }
+  #guide .empty { color: var(--muted); }
+  code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<nav>
+  <div id="strip" role="tablist" aria-label="Tabs"></div>
+  <div id="tools">
+    <button id="refresh" type="button" title="Refresh this tab" aria-label="Refresh this tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
+    </button>
+    <div id="theme" role="group" aria-label="Theme">
+      <button type="button" data-mode="system" title="Theme: System" aria-label="Theme: System" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      </button>
+      <button type="button" data-mode="light" title="Theme: Light" aria-label="Theme: Light" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+      <button type="button" data-mode="dark" title="Theme: Dark" aria-label="Theme: Dark" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+<div id="ended" role="status">This Claude Code session has ended. You can close this window.</div>
+<main id="main">
+  <section id="guide" class="shown" role="tabpanel">
+    <h1>Guide</h1>
+    <p>Each mod that uses browser-pane adds a tab to this window. Run <code>/browser-pane</code> in Claude Code to come back here, or <code>/browser-pane &lt;tab&gt;</code> to open a tab.</p>
+    <p>Build a tab of your own: the <a href="https://github.com/sandipchitale/browser-pane/blob/main/INTEGRATION_GUIDE.md" target="_blank" rel="noopener noreferrer">integration guide</a> explains why browser-pane exists and walks you from a copy of the Template to a published mod, with Claude Code.</p>
+    <ul id="list"></ul>
+  </section>
+</main>
+<script>
+'use strict'
+const GUIDE = 'guide'
+const POLL_MS = 1000
+const FAILS_TO_END = 3
+const strip = document.getElementById('strip')
+const main = document.getElementById('main')
+const list = document.getElementById('list')
+const guide = document.getElementById('guide')
+const refreshButton = document.getElementById('refresh')
+const themeButtons = document.querySelectorAll('#theme button')
+const THEME_KEY = 'browser-pane-theme'
+const MODES = ['system', 'light', 'dark']
+const darkQuery = matchMedia('(prefers-color-scheme: dark)')
+
+const query = new URLSearchParams(location.search)
+const state = {
+  tabs: [],
+  current: GUIDE,
+  frames: new Map(), // tab id -> iframe
+  wantId: 0,
+  fails: 0,
+  first: true,
+}
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag)
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'onclick') node.addEventListener('click', v)
+    else if (v !== undefined) node.setAttribute(k, v)
+  }
+  for (const c of children) node.append(c)
+  return node
+}
+
+// A tab's page is loaded the first time it shows, and kept (hidden) after: its state survives switching.
+function frameFor(id, select) {
+  let frame = state.frames.get(id)
+  if (!frame) {
+    const src = `/tab/${encodeURIComponent(id)}/` + (select !== undefined ? `?select=${encodeURIComponent(select)}` : '')
+    frame = el('iframe', { src, title: id, role: 'tabpanel' })
+    state.frames.set(id, frame)
+    main.append(frame)
+  } else if (select !== undefined) {
+    frame.contentWindow?.postMessage({ type: 'browser-pane:select', select }, location.origin)
+  }
+  return frame
+}
+
+// Theme: one choice for the window and every tab in it, remembered. Three buttons pick System,
+// Light or Dark; the chosen one is pressed.
+function themeMode() {
+  try {
+    const mode = localStorage.getItem(THEME_KEY)
+    return MODES.includes(mode) ? mode : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
+function applyTheme() {
+  const mode = themeMode()
+  const theme = mode === 'dark' || (mode === 'system' && darkQuery.matches) ? 'dark' : 'light'
+  document.documentElement.dataset.theme = theme
+  for (const button of themeButtons) button.setAttribute('aria-pressed', button.dataset.mode === mode)
+  for (const frame of state.frames.values()) frame.contentWindow?.postMessage({ type: 'browser-pane:theme', theme }, location.origin)
+}
+
+for (const button of themeButtons) {
+  button.addEventListener('click', () => {
+    try {
+      localStorage.setItem(THEME_KEY, button.dataset.mode)
+    } catch {}
+    applyTheme()
+  })
+}
+darkQuery.addEventListener('change', applyTheme)
+
+// Refresh: the tab showing reloads its data (or its page). The Guide refreshes with the next poll.
+refreshButton.addEventListener('click', () => {
+  if (state.current === GUIDE) return poll()
+  state.frames.get(state.current)?.contentWindow?.postMessage({ type: 'browser-pane:refresh' }, location.origin)
+})
+
+function show(id, select) {
+  if (id !== GUIDE && !state.tabs.some(t => t.id === id)) id = GUIDE
+  state.current = id
+  guide.classList.toggle('shown', id === GUIDE)
+  for (const [tid, frame] of state.frames) frame.classList.toggle('shown', tid === id)
+  if (id !== GUIDE) frameFor(id, select).classList.add('shown')
+  const title = id === GUIDE ? 'Guide' : state.tabs.find(t => t.id === id)?.title
+  document.title = `${title} · Claude Code`
+  renderStrip()
+}
+
+// Pins: a tab's own default (registered pinned), unless the person pinned or unpinned it here.
+const PINS_KEY = 'browser-pane-pins'
+const PIN_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>'
+
+function pinChoices() {
+  try {
+    const choices = JSON.parse(localStorage.getItem(PINS_KEY) || '{}')
+    return choices && typeof choices === 'object' ? choices : {}
+  } catch {
+    return {}
+  }
+}
+
+const isPinned = (tab, choices = pinChoices()) => (tab.id in choices ? choices[tab.id] === true : tab.pinned === true)
+
+// Pinned tabs first, each group in the order the tabs were registered.
+function ordered() {
+  const choices = pinChoices()
+  return [...state.tabs.filter(t => isPinned(t, choices)), ...state.tabs.filter(t => !isPinned(t, choices))]
+}
+
+function togglePin(tab) {
+  const choices = pinChoices()
+  choices[tab.id] = !isPinned(tab, choices)
+  try {
+    localStorage.setItem(PINS_KEY, JSON.stringify(choices))
+  } catch {}
+  renderStrip()
+  renderGuide()
+}
+
+function pinIcon() {
+  const span = el('span', { class: 'pin' })
+  span.innerHTML = PIN_SVG
+  return span
+}
+
+function renderStrip() {
+  const tabs = [{ id: GUIDE, title: 'Guide' }, ...ordered()]
+  const choices = pinChoices()
+  strip.replaceChildren(
+    ...tabs.map(t =>
+      el(
+        'button',
+        { role: 'tab', 'aria-selected': String(t.id === state.current), onclick: () => show(t.id) },
+        ...(t.id !== GUIDE && isPinned(t, choices) ? [pinIcon()] : []),
+        t.title,
+      ),
+    ),
+  )
+}
+
+function renderGuide() {
+  if (state.tabs.length === 0) {
+    list.replaceChildren(el('li', { class: 'empty' }, 'No mod has added a tab yet.'))
+    return
+  }
+  const choices = pinChoices()
+  list.replaceChildren(
+    ...ordered().map(t => {
+      const pinned = isPinned(t, choices)
+      const pin = el('button', {
+        class: 'pin',
+        'aria-pressed': String(pinned),
+        title: pinned ? `Pinned: ${t.title} comes first. Click to unpin.` : `Pin ${t.title}, so it comes first.`,
+        'aria-label': pinned ? `Unpin ${t.title}` : `Pin ${t.title}`,
+        onclick: () => togglePin(t),
+      })
+      pin.innerHTML = PIN_SVG
+      return el(
+        'li',
+        { class: pinned ? 'pinned' : undefined },
+        pin,
+        el('span', { class: 'name' }, t.title),
+        t.error ? el('span', { class: 'error' }, `Its server module failed: ${t.error}`) : el('span', { class: 'desc' }, t.description || t.id),
+        el('button', { onclick: () => show(t.id) }, 'Open'),
+      )
+    }),
+  )
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/api/state', { cache: 'no-store' })
+    if (!res.ok) throw new Error(String(res.status))
+    const data = await res.json()
+    state.fails = 0
+    document.body.classList.remove('ended')
+    const changed = JSON.stringify(data.tabs) !== JSON.stringify(state.tabs)
+    state.tabs = data.tabs
+    if (changed) {
+      // A tab that went away (its mod was removed) takes its page with it.
+      for (const [id, frame] of state.frames) {
+        if (state.tabs.some(t => t.id === id)) continue
+        frame.remove()
+        state.frames.delete(id)
+        if (state.current === id) state.current = GUIDE
+      }
+      show(state.current)
+      renderGuide()
+    }
+    // Opened on a URL that names no show (a reload, a bookmark): shows already made are not this one's.
+    if (state.wantId === undefined) state.wantId = data.want?.id ?? 0
+    // A show from Claude Code: switch to its tab, hand it the selection, and come forward.
+    if (data.want && data.want.id > state.wantId) {
+      state.wantId = data.want.id
+      show(data.want.tab, data.want.select)
+      window.focus()
+    } else if (state.first && query.get('tab')) {
+      // Opened on a tab's URL (a reload, a bookmark) with no show waiting.
+      show(query.get('tab'), query.get('select') ?? undefined)
+    }
+    state.first = false
+  } catch {
+    if (++state.fails >= FAILS_TO_END) document.body.classList.add('ended')
+  }
+}
+
+async function loop() {
+  await poll()
+  setTimeout(loop, POLL_MS)
+}
+
+// The URL the window opened on names the show that opened it; it is applied once the tabs are known.
+state.wantId = query.has('want') ? Number(query.get('want')) - 1 : undefined
+applyTheme()
+renderStrip()
+renderGuide()
+loop()
+</script>
+</body>
+</html>

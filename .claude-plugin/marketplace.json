@@ -1,0 +1,29 @@
+{
+  "name": "browser-pane",
+  "owner": {
+    "name": "sandipchitale"
+  },
+  "description": "browser-pane: one shared browser window for Claude Code mods, and example mods built on it",
+  "plugins": [
+    {
+      "name": "browser-pane",
+      "source": "./",
+      "description": "One shared browser window for mods: each mod adds a tab ($.browserPane), and a Guide tab lists them"
+    },
+    {
+      "name": "browser-pane-template",
+      "source": "./examples/template",
+      "description": "A starter mod for browser-pane: a tab with a page and a server module"
+    },
+    {
+      "name": "browser-pane-images",
+      "source": "./examples/images",
+      "description": "Browse the images you paste into the prompt: chips above the prompt and an Images tab in the browser-pane window"
+    },
+    {
+      "name": "browser-pane-editors",
+      "source": "./examples/editors",
+      "description": "GUI editors as browser-pane tabs: Plugins, MCP and a live session Cockpit with usage meters"
+    }
+  ]
+}

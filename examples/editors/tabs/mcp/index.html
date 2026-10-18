@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Editor</title>
+<!-- The window's theme (data-theme), Refresh and selection: browser-pane's client. -->
+<script src="/bp/client.js"></script>
+<link rel="stylesheet" href="api/tailwind.css">
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
+<div class="flex h-screen flex-col">
+
+  <header class="border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div class="min-w-0">
+        <h1 class="text-base font-semibold tracking-tight">MCP Editor</h1>
+        <p id="cwd" class="truncate text-xs text-slate-500 dark:text-slate-400"></p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="summary" class="text-xs text-slate-500 dark:text-slate-400"></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-2 dark:border-slate-800">
+    <div role="group" aria-label="Filter" class="inline-flex overflow-hidden rounded-md border border-slate-300 text-xs dark:border-slate-700">
+      <button data-filter="all" class="filter px-3 py-1.5 hover:bg-slate-200 dark:hover:bg-slate-800">All</button>
+      <button data-filter="connected" class="filter border-l border-slate-300 px-3 py-1.5 hover:bg-slate-200 dark:border-slate-700 dark:hover:bg-slate-800">Connected</button>
+      <button data-filter="failed" class="filter border-l border-slate-300 px-3 py-1.5 hover:bg-slate-200 dark:border-slate-700 dark:hover:bg-slate-800">Failed</button>
+      <button data-filter="disabled" class="filter border-l border-slate-300 px-3 py-1.5 hover:bg-slate-200 dark:border-slate-700 dark:hover:bg-slate-800">Disabled</button>
+    </div>
+    <input id="search" type="search" placeholder="Search…" aria-label="Search"
+      class="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900">
+    <button id="expandAll" class="btn">Expand all</button>
+    <button id="collapseAll" class="btn">Collapse all</button>
+    <button id="addServer" class="btn btn-primary">Add server…</button>
+  </div>
+
+  <main class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(280px,5fr)_7fr]">
+    <nav aria-label="Tree" class="min-h-0 overflow-y-auto border-slate-200 p-2 md:border-r dark:border-slate-800">
+      <div id="tree" role="tree" class="text-sm"></div>
+      <p id="treeEmpty" class="py-10 text-center text-sm text-slate-400 dark:text-slate-500" hidden>Nothing matches.</p>
+    </nav>
+    <section id="detail" aria-live="polite" class="min-h-0 overflow-y-auto p-4"></section>
+  </main>
+</div>
+
+<div id="toast" class="fixed right-4 bottom-4 z-20 hidden max-w-md rounded-lg border bg-white p-3 text-sm shadow-lg dark:bg-slate-900" role="status"></div>
+
+<dialog id="formDialog" class="m-auto max-h-[92vh] w-[min(36rem,94vw)] overflow-y-auto rounded-xl border border-slate-300 bg-white p-4 text-slate-900 backdrop:bg-black/40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+  <form id="form" class="space-y-3" novalidate>
+    <h2 id="formTitle" class="text-base font-semibold">Add MCP server</h2>
+    <div class="grid grid-cols-2 gap-3">
+      <label class="block text-xs text-slate-500 dark:text-slate-400">Name
+        <input id="fName" class="field" autocomplete="off" placeholder="my-server">
+      </label>
+      <label class="block text-xs text-slate-500 dark:text-slate-400">Scope
+        <select id="fScope" class="field"><option value="local">local (this project, private)</option><option value="project">project (.mcp.json)</option><option value="user">user (all projects)</option></select>
+      </label>
+    </div>
+    <div role="tablist" class="flex gap-1 border-b border-slate-200 dark:border-slate-800">
+      <button type="button" role="tab" data-ftab="form" class="ftab -mb-px border-b-2 px-3 py-1.5 text-sm">Form</button>
+      <button type="button" role="tab" data-ftab="json" class="ftab -mb-px border-b-2 px-3 py-1.5 text-sm">Raw JSON</button>
+    </div>
+    <div id="formPane" class="space-y-3">
+      <label class="block text-xs text-slate-500 dark:text-slate-400">Transport
+        <select id="fType" class="field"><option value="stdio">stdio (a command)</option><option value="http">http</option><option value="sse">sse</option></select>
+      </label>
+      <div id="stdioFields" class="space-y-3">
+        <label class="block text-xs text-slate-500 dark:text-slate-400">Command
+          <input id="fCommand" class="field" autocomplete="off" placeholder="npx">
+        </label>
+        <label class="block text-xs text-slate-500 dark:text-slate-400">Arguments — one per line
+          <textarea id="fArgs" rows="3" class="field font-mono" placeholder="-y&#10;some-mcp-server"></textarea>
+        </label>
+        <div><div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400"><span>Environment variables</span><button type="button" class="btn" data-addrow="env">Add</button></div><div id="envRows" class="mt-1 space-y-1"></div></div>
+      </div>
+      <div id="urlFields" class="space-y-3" hidden>
+        <label class="block text-xs text-slate-500 dark:text-slate-400">URL
+          <input id="fUrl" class="field" autocomplete="off" placeholder="https://example.com/mcp">
+        </label>
+        <div><div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400"><span>Headers</span><button type="button" class="btn" data-addrow="headers">Add</button></div><div id="headerRows" class="mt-1 space-y-1"></div></div>
+      </div>
+      <label class="inline-flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400"><input id="fShow" type="checkbox" class="accent-sky-600"> Show secret values</label>
+    </div>
+    <div id="jsonPane" class="space-y-1" hidden>
+      <textarea id="fJson" rows="10" spellcheck="false" class="field font-mono text-xs"></textarea>
+      <p class="text-xs text-slate-500 dark:text-slate-400">Same shape as <code>claude mcp add-json</code>.</p>
+    </div>
+    <p id="formError" class="text-sm text-rose-600 dark:text-rose-400" role="alert" hidden></p>
+    <div class="flex justify-end gap-2">
+      <button type="button" id="formCancel" class="btn">Cancel</button>
+      <button type="submit" id="formSave" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id)
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const H = {}
+
+// ---------- state ----------
+const SCOPES = [
+  ['user', 'User', 'All projects, in ~/.claude.json'],
+  ['project', 'Project', 'Shared, in .mcp.json'],
+  ['local', 'Local', 'This project, private'],
+  ['plugin', 'Plugins', 'Provided by installed plugins'],
+  ['connector', 'claude.ai connectors', 'Provided by your claude.ai account'],
+  ['other', 'Other', 'Reported by Claude Code, not found in a config file'],
+]
+const EDITABLE = new Set(['user', 'project', 'local'])
+const S = { cfg: null, health: null, healthError: '', filter: 'all', q: '', busy: false, reveal: false, info: {},
+  expanded: new Set(SCOPES.map(s => s[0])), selected: null }
+
+function kindOf(name) { return name.startsWith('plugin:') ? 'plugin' : name.startsWith('claude.ai ') ? 'connector' : 'other' }
+
+// One row per (scope, name): config servers, then anything only the health check or the disabled list knows.
+function servers() {
+  if (!S.cfg) return []
+  const disabledNames = new Set(S.cfg.disabledNames)
+  const health = new Map((S.health ?? []).map(h => [h.name, h]))
+  const out = S.cfg.servers.map(s => ({ ...s, id: s.scope + ':' + s.name, editable: true }))
+  const known = new Set(out.map(s => s.name))
+  const extra = new Set([...health.keys(), ...disabledNames].filter(n => !known.has(n)))
+  for (const name of extra) out.push({ id: kindOf(name) + ':' + name, name, scope: kindOf(name), config: null, disabled: disabledNames.has(name), editable: false })
+  for (const s of out) {
+    const h = health.get(s.name)
+    s.health = h
+    s.status = s.disabled ? 'disabled' : s.approval === 'pending' ? 'pending' : h ? h.status : S.health ? 'unknown' : 'checking'
+  }
+  return out
+}
+const matchesFilter = s => S.filter === 'all' || (S.filter === 'connected' ? s.status === 'connected' : S.filter === 'failed' ? ['failed', 'needs-auth'].includes(s.status) : s.status === 'disabled')
+const matchesSearch = s => {
+  if (!S.q) return true
+  const q = S.q.toLowerCase()
+  return s.name.toLowerCase().includes(q) || (s.config?.command ?? s.config?.url ?? s.health?.target ?? '').toLowerCase().includes(q)
+}
+
+// ---------- loading ----------
+async function api(path, opts) { const r = await fetch(path, { ...opts, headers: { ...H, ...(opts?.headers ?? {}) } }); const j = await r.json().catch(() => ({})); if (!r.ok && !j.error) j.error = r.statusText; return j }
+
+async function loadConfig() {
+  const j = await api('api/mcp/config')
+  if (j.error) { S.cfgError = j.error } else { S.cfg = j; S.cfgError = '' }
+  render()
+}
+async function loadHealth() {
+  S.health = null; S.healthError = ''
+  render()
+  const j = await api('api/mcp/health')
+  S.health = j.health ?? []
+  S.healthError = j.ok === false ? j.error : ''
+  render()
+}
+async function reload() { await loadConfig(); loadHealth() }
+
+let toastTimer
+function toast(text, kind, sticky) {
+  const el = $('toast')
+  el.className = 'fixed right-4 bottom-4 z-20 max-w-md rounded-lg border p-3 text-sm whitespace-pre-wrap shadow-lg ' +
+    (kind === 'ok' ? 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
+      : kind === 'err' ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200'
+      : 'border-slate-300 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200')
+  el.textContent = text
+  clearTimeout(toastTimer)
+  if (!sticky) toastTimer = setTimeout(() => el.classList.add('hidden'), kind === 'err' ? 12000 : 6000)
+}
+$('toast').addEventListener('click', () => $('toast').classList.add('hidden'))
+
+async function run(path, body, label, applies) {
+  if (S.busy) return null
+  S.busy = true; render(); toast(label + '…', 'info', true)
+  const j = await api(path, { method: 'POST', body: JSON.stringify(body) })
+  S.busy = false
+  const ok = j.ok === true
+  toast(label + (ok ? ' — done' : ' — failed') + '\n' + (j.text || j.error || '').slice(0, 600) + (ok && applies ? '\nRestart Claude Code or reconnect in /mcp to apply.' : ''), ok ? 'ok' : 'err')
+  S.info = {}
+  await loadConfig(); loadHealth()
+  return j
+}
+
+// ---------- tree ----------
+const BADGE = {
+  connected: ['connected', 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'],
+  failed: ['failed', 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'],
+  'needs-auth': ['needs auth', 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'],
+  pending: ['pending approval', 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'],
+  disabled: ['disabled', 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400'],
+  checking: ['checking…', 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300'],
+  unknown: ['unknown', 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'],
+}
+const badge = (text, cls) => `<span class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${cls}">${esc(text)}</span>`
+const statusBadge = st => badge(...BADGE[st])
+
+let rows = []
+function renderTree() {
+  const all = servers().filter(s => matchesFilter(s) && matchesSearch(s))
+  const forced = !!S.q && !S.noForce
+  rows = []
+  let html = ''
+  for (const [key, label] of SCOPES) {
+    const list = all.filter(s => s.scope === key).sort((a, b) => a.name.localeCompare(b.name))
+    if (!list.length && !(S.filter === 'all' && !S.q && EDITABLE.has(key))) continue
+    const isOpen = list.length > 0 && (forced || S.expanded.has(key))
+    rows.push({ key: 'scope:' + key, parent: null, hasKids: list.length > 0, isOpen })
+    html += rowHtml('scope:' + key, label, 1, list.length > 0, isOpen, `<span class="shrink-0 text-xs text-slate-400">${list.length}</span>`)
+    if (isOpen) for (const s of list) {
+      rows.push({ key: s.id, parent: 'scope:' + key, hasKids: false, isOpen: false })
+      html += rowHtml(s.id, s.name, 2, false, false, statusBadge(s.status))
+    }
+  }
+  // Background renders (health results, refresh) must not steal keyboard focus from the tree.
+  const focusKey = $('tree').contains(document.activeElement) ? document.activeElement.closest('[data-key]')?.dataset.key : null
+  $('tree').innerHTML = html
+  if (focusKey) $('tree').querySelector(`[data-key="${CSS.escape(focusKey)}"]`)?.focus()
+  $('treeEmpty').hidden = rows.length > 0
+  if (S.selected) $('tree').querySelector(`[data-key="${CSS.escape(S.selected)}"]`)?.scrollIntoView({ block: 'nearest' })
+}
+function rowHtml(key, label, level, hasKids, isOpen, meta) {
+  const sel = S.selected === key
+  return `<div role="treeitem" aria-level="${level}" aria-selected="${sel}" ${hasKids ? `aria-expanded="${isOpen}"` : ''} data-key="${esc(key)}" tabindex="${sel ? 0 : -1}"
+    class="flex cursor-pointer items-center gap-1.5 rounded-md py-1 pr-2 ${level === 2 ? 'pl-8' : 'pl-1'} ${sel ? 'bg-sky-100 dark:bg-sky-950' : 'hover:bg-slate-200/70 dark:hover:bg-slate-800/70'}">
+    <span data-chev class="inline-flex size-5 shrink-0 items-center justify-center text-slate-400 ${hasKids ? '' : 'invisible'}">${isOpen ? '▾' : '▸'}</span>
+    <span class="min-w-0 flex-1 truncate ${level === 1 ? 'font-medium' : ''}">${esc(label)}</span>${meta}</div>`
+}
+
+// ---------- detail ----------
+const mask = v => '•'.repeat(Math.min(12, Math.max(6, String(v).length)))
+function kvTable(title, obj) {
+  const e = Object.entries(obj ?? {})
+  if (!e.length) return ''
+  return `<h3 class="mt-4 text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-400">${esc(title)}</h3>
+    <table class="mt-1 w-full text-sm"><tbody>${e.map(([k, v]) => `<tr class="border-b border-slate-200 dark:border-slate-800"><td class="w-1/3 py-1 pr-3 font-mono text-xs text-slate-500 dark:text-slate-400">${esc(k)}</td><td class="py-1 font-mono text-xs break-all">${esc(S.reveal ? v : mask(v))}</td></tr>`).join('')}</tbody></table>`
+}
+const btn = (act, label, cls = '') => `<button class="btn ${cls}" data-act="${act}" ${S.busy ? 'disabled' : ''}>${esc(label)}</button>`
+
+function serverDetail(s) {
+  const c = s.config
+  const transport = c ? (c.type ?? 'stdio') : ''
+  const cmd = c ? (transport === 'stdio' ? [c.command, ...(c.args ?? [])].join(' ') : c.url) : s.health?.target
+  const scopeLabel = SCOPES.find(x => x[0] === s.scope)?.[1]
+  const hint = s.scope === 'plugin' ? 'Provided by a plugin. Disable the server here or manage the plugin in the plugin editor.'
+    : s.scope === 'connector' ? 'A claude.ai connector. Manage it at claude.ai; you can disable it for this project here.' : ''
+  const hasSecrets = c && (Object.keys(c.env ?? {}).length || Object.keys(c.headers ?? {}).length)
+  return `<h2 class="flex flex-wrap items-center gap-2 text-lg font-semibold">${esc(s.name)} ${statusBadge(s.status)}</h2>
+    ${s.health?.reason ? `<p class="mt-1 rounded-md border border-rose-200 bg-rose-50 p-2 font-mono text-xs break-words text-rose-900 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">${esc(s.health.reason)}</p>` : ''}
+    ${s.status === 'pending' ? '<p class="mt-1 text-sm text-amber-700 dark:text-amber-300">This .mcp.json server is waiting for your approval. Approve it to let Claude Code start it, or reject it.</p>' : ''}
+    ${hint ? `<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">${esc(hint)}</p>` : ''}
+    <div class="mt-3 flex flex-wrap gap-2">
+      ${s.editable ? btn('edit', 'Edit') : ''}
+      ${s.status === 'pending' ? btn('approve', 'Approve') + btn('toggle', 'Reject') : btn('toggle', s.disabled ? 'Enable' : 'Disable')}
+      ${s.editable ? btn('copy', 'Copy add-json command') : ''}
+      ${btn('get', 'Details from CLI')}
+      ${s.editable ? btn('remove', 'Remove', 'btn-danger') : ''}
+    </div>
+    <dl class="mt-4 grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-sm">
+      <dt class="text-slate-500 dark:text-slate-400">Scope</dt><dd>${esc(scopeLabel)}</dd>
+      ${transport ? `<dt class="text-slate-500 dark:text-slate-400">Transport</dt><dd>${esc(transport)}</dd>` : ''}
+      ${cmd ? `<dt class="text-slate-500 dark:text-slate-400">${transport === 'stdio' ? 'Command' : 'Target'}</dt><dd class="font-mono text-xs break-all">${esc(cmd)}</dd>` : ''}
+    </dl>
+    ${kvTable('Environment', c?.env)}${kvTable('Headers', c?.headers)}
+    ${hasSecrets ? `<label class="mt-2 inline-flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400"><input type="checkbox" data-reveal ${S.reveal ? 'checked' : ''} class="accent-sky-600"> Reveal values</label>` : ''}
+    ${S.info[s.id] ? `<pre class="mt-4 max-h-80 overflow-auto rounded-md border border-slate-200 bg-white p-3 text-xs whitespace-pre-wrap dark:border-slate-800 dark:bg-slate-900">${esc(S.info[s.id])}</pre>` : ''}`
+}
+
+function scopeDetail(key) {
+  const [, label, desc] = SCOPES.find(x => x[0] === key)
+  const list = servers().filter(s => s.scope === key)
+  return `<h2 class="text-lg font-semibold">${esc(label)}</h2>
+    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">${esc(desc)}.</p>
+    <p class="mt-3 text-sm">${list.length} server${list.length === 1 ? '' : 's'}.</p>
+    ${EDITABLE.has(key) ? `<div class="mt-3"><button class="btn btn-primary" data-act="add-in" data-scope="${key}">Add server to ${esc(label)}…</button></div>` : ''}`
+}
+
+const emptyDetail = () => '<p class="py-16 text-center text-sm text-slate-400 dark:text-slate-500">Select a server in the tree to see its details.</p>'
+const current = () => servers().find(s => s.id === S.selected)
+
+let shownKey = null
+function renderDetail() {
+  if (S.selected !== shownKey) { S.reveal = false; shownKey = S.selected } // secrets are re-masked on every new selection
+  let html = emptyDetail()
+  if (S.selected?.startsWith('scope:')) html = scopeDetail(S.selected.slice(6))
+  else if (S.selected) { const s = current(); if (s) html = serverDetail(s) }
+  $('detail').innerHTML = html
+}
+
+function render() {
+  document.querySelectorAll('.filter').forEach(b => {
+    const on = b.dataset.filter === S.filter
+    b.setAttribute('aria-pressed', on)
+    b.classList.toggle('font-semibold', on)
+    b.classList.toggle('bg-slate-200', on)
+    b.classList.toggle('dark:bg-slate-800', on)
+  })
+  if (S.cfgError) { $('tree').innerHTML = ''; $('detail').innerHTML = `<p class="rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200">Could not load: ${esc(S.cfgError)}</p>`; return }
+  if (!S.cfg) { $('detail').innerHTML = '<p class="py-16 text-center text-sm text-slate-400">Loading…</p>'; return }
+  const home = S.cfg.home
+  $('cwd').textContent = home && (S.cfg.cwd === home || S.cfg.cwd.startsWith(home + '/')) ? '~' + S.cfg.cwd.slice(home.length) : S.cfg.cwd
+  const all = servers()
+  const n = st => all.filter(s => s.status === st).length
+  $('summary').textContent = `${all.length} servers · ${n('connected')} connected · ${n('failed') + n('needs-auth')} failed · ${n('disabled')} disabled` + (S.health === null ? ' · checking…' : '')
+  renderTree(); renderDetail()
+}
+
+// ---------- events ----------
+document.querySelectorAll('.filter').forEach(b => b.addEventListener('click', () => { S.filter = b.dataset.filter; render() }))
+let searchTimer
+$('search').addEventListener('input', e => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { S.q = e.target.value.trim(); S.noForce = false; render() }, 120) })
+// The window's Refresh button re-runs the health check.
+browserPane.onRefresh(() => { if (!S.busy && !(S.cfg && S.health === null)) loadHealth() })
+$('expandAll').addEventListener('click', () => { SCOPES.forEach(s => S.expanded.add(s[0])); render() })
+$('collapseAll').addEventListener('click', () => { S.expanded.clear(); S.noForce = true; render() })
+
+const focusRow = key => $('tree').querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus()
+function toggleScope(key, force) { const k = key.slice(6); const on = force ?? !S.expanded.has(k); on ? S.expanded.add(k) : S.expanded.delete(k) }
+$('tree').addEventListener('click', e => {
+  const row = e.target.closest('[data-key]'); if (!row) return
+  const key = row.dataset.key
+  if (e.target.closest('[data-chev]') && key.startsWith('scope:')) toggleScope(key)
+  S.selected = key; render(); focusRow(key)
+})
+$('tree').addEventListener('dblclick', e => { const row = e.target.closest('[data-key]'); if (row?.dataset.key.startsWith('scope:')) { toggleScope(row.dataset.key); render() } })
+$('tree').addEventListener('keydown', e => {
+  const i = rows.findIndex(r => r.key === S.selected), r = rows[i]
+  const go = n => { if (rows[n]) { e.preventDefault(); S.selected = rows[n].key; render(); focusRow(S.selected) } }
+  if (e.key === 'ArrowDown') go(i < 0 ? 0 : i + 1)
+  else if (e.key === 'ArrowUp') go(i < 0 ? 0 : i - 1)
+  else if (e.key === 'Home') go(0)
+  else if (e.key === 'End') go(rows.length - 1)
+  else if (e.key === 'ArrowRight' && r?.hasKids) { e.preventDefault(); if (!r.isOpen) { toggleScope(r.key, true); render(); focusRow(r.key) } else go(i + 1) }
+  else if (e.key === 'ArrowLeft' && r) { e.preventDefault(); if (r.isOpen) { toggleScope(r.key, false); render(); focusRow(r.key) } else if (r.parent) { S.selected = r.parent; render(); focusRow(r.parent) } }
+  else if ((e.key === 'Enter' || e.key === ' ') && r?.hasKids) { e.preventDefault(); toggleScope(r.key); render(); focusRow(r.key) }
+})
+
+const shq = s => "'" + String(s).replace(/'/g, "'\\''") + "'"
+$('detail').addEventListener('change', e => { if (e.target.matches('[data-reveal]')) { S.reveal = e.target.checked; renderDetail() } })
+$('detail').addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'); if (!b || b.disabled) return
+  const s = current(), act = b.dataset.act
+  if (act === 'add-in') return openForm(null, b.dataset.scope)
+  if (!s) return
+  if (act === 'edit') return openForm(s)
+  if (act === 'remove') { if (confirm(`Remove ${s.name} from ${s.scope} scope?`)) run('api/mcp/action', { action: 'remove', name: s.name, scope: s.scope }, 'Remove ' + s.name, true); return }
+  if (act === 'approve') { run('api/mcp/toggle', { name: s.name, disabled: false }, 'Approve ' + s.name, true); return }
+  if (act === 'toggle') { if (confirm(`${s.disabled ? 'Enable' : 'Disable'} ${s.name} for this project?\nThis edits Claude Code's own config file (~/.claude.json); a timestamped backup is kept next to it.`)) run('api/mcp/toggle', { name: s.name, disabled: !s.disabled }, (s.disabled ? 'Enable ' : 'Disable ') + s.name, true); return }
+  if (act === 'copy') {
+    const cmd = `claude mcp add-json -s ${s.scope} ${shq(s.name)} ${shq(JSON.stringify(s.config))}`
+    try { await navigator.clipboard.writeText(cmd); toast('Copied. It contains the secret values.', 'ok') } catch (er) { toast('Could not copy: ' + er, 'err') }
+    return
+  }
+  if (act === 'get') {
+    S.info[s.id] = 'Loading…'; renderDetail()
+    const j = await api('api/mcp/action', { method: 'POST', body: JSON.stringify({ action: 'get', name: s.name }) })
+    S.info[s.id] = j.text || j.error || '(no output)'; renderDetail()
+  }
+})
+
+// ---------- add / edit form ----------
+let editing = null // { name, scope } when editing
+const rowsOf = id => [...$(id).querySelectorAll('[data-row]')].map(r => [r.querySelector('[data-k]').value.trim(), r.querySelector('[data-v]').value]).filter(([k]) => k)
+function addRow(listId, k = '', v = '') {
+  const d = document.createElement('div')
+  d.dataset.row = ''
+  d.className = 'flex gap-1'
+  d.innerHTML = `<input data-k class="field font-mono text-xs" placeholder="name" value="${esc(k)}"><input data-v type="${$('fShow').checked ? 'text' : 'password'}" autocomplete="off" class="field font-mono text-xs" placeholder="value" value="${esc(v)}"><button type="button" class="btn" data-del aria-label="Remove row">✕</button>`
+  $(listId).append(d)
+}
+$('formDialog').addEventListener('click', e => {
+  if (e.target.closest('[data-del]')) e.target.closest('[data-row]').remove()
+  const add = e.target.closest('[data-addrow]'); if (add) addRow(add.dataset.addrow === 'env' ? 'envRows' : 'headerRows')
+  const t = e.target.closest('[data-ftab]'); if (t) switchTab(t.dataset.ftab)
+})
+$('fShow').addEventListener('change', () => document.querySelectorAll('#formDialog [data-v]').forEach(i => (i.type = $('fShow').checked ? 'text' : 'password')))
+$('fType').addEventListener('change', syncTransport)
+function syncTransport() { const stdio = $('fType').value === 'stdio'; $('stdioFields').hidden = !stdio; $('urlFields').hidden = stdio }
+
+function formToConfig() {
+  const type = $('fType').value
+  if (type === 'stdio') {
+    const cfg = { type, command: $('fCommand').value.trim(), args: $('fArgs').value.split('\n').map(x => x.trim()).filter(Boolean) }
+    const env = Object.fromEntries(rowsOf('envRows')); if (Object.keys(env).length) cfg.env = env
+    return cfg
+  }
+  const cfg = { type, url: $('fUrl').value.trim() }
+  const headers = Object.fromEntries(rowsOf('headerRows')); if (Object.keys(headers).length) cfg.headers = headers
+  return cfg
+}
+function configToForm(c) {
+  const type = c?.type ?? 'stdio'
+  $('fType').value = ['stdio', 'http', 'sse'].includes(type) ? type : 'stdio'
+  $('fCommand').value = c?.command ?? ''; $('fArgs').value = (c?.args ?? []).join('\n'); $('fUrl').value = c?.url ?? ''
+  $('envRows').innerHTML = ''; $('headerRows').innerHTML = ''
+  Object.entries(c?.env ?? {}).forEach(([k, v]) => addRow('envRows', k, v))
+  Object.entries(c?.headers ?? {}).forEach(([k, v]) => addRow('headerRows', k, v))
+  syncTransport()
+}
+let ftab = 'form'
+function switchTab(t) {
+  setFormError('')
+  if (t === 'json' && ftab === 'form') $('fJson').value = JSON.stringify(formToConfig(), null, 2)
+  if (t === 'form' && ftab === 'json') {
+    try { configToForm(JSON.parse($('fJson').value)) } catch (e) { setFormError('Raw JSON is not valid: ' + e.message); return }
+  }
+  ftab = t
+  $('formPane').hidden = t !== 'form'; $('jsonPane').hidden = t !== 'json'
+  document.querySelectorAll('.ftab').forEach(b => { const on = b.dataset.ftab === t; b.className = 'ftab -mb-px border-b-2 px-3 py-1.5 text-sm ' + (on ? 'border-sky-500 text-sky-700 dark:text-sky-300' : 'border-transparent text-slate-500') })
+}
+function setFormError(m) { $('formError').textContent = m; $('formError').hidden = !m }
+
+function openForm(server, scope) {
+  editing = server ? { name: server.name, scope: server.scope } : null
+  $('formTitle').textContent = server ? 'Edit ' + server.name : 'Add MCP server'
+  $('fName').value = server?.name ?? ''; $('fName').disabled = !!server
+  $('fScope').value = server?.scope ?? scope ?? 'local'; $('fScope').disabled = !!server
+  $('fShow').checked = false
+  configToForm(server?.config ?? { type: 'stdio' })
+  ftab = 'form'; switchTab('form'); setFormError('')
+  $('formDialog').showModal(); (server ? ($('fType').value === 'stdio' ? $('fCommand') : $('fUrl')) : $('fName')).focus()
+}
+$('addServer').addEventListener('click', () => openForm(null))
+$('formCancel').addEventListener('click', () => $('formDialog').close())
+$('form').addEventListener('submit', async e => {
+  e.preventDefault()
+  let config
+  if (ftab === 'json') { try { config = JSON.parse($('fJson').value) } catch (er) { return setFormError('Raw JSON is not valid: ' + er.message) } } else config = formToConfig()
+  const name = $('fName').value.trim(), scope = $('fScope').value
+  if (!/^[\w.-]{1,100}$/.test(name)) return setFormError('Name: letters, digits, dot, dash and underscore only.')
+  if (!editing && S.cfg.servers.some(s => s.name === name && s.scope === scope)) return setFormError(`${name} already exists in ${scope} scope. Edit it instead.`)
+  if (!config.type || config.type === 'stdio') { if (!config.command) return setFormError('Command is required.') }
+  else { try { const u = new URL(config.url); if (!/^https?:$/.test(u.protocol)) throw 0 } catch (er) { return setFormError('URL must be a valid http(s) URL.') } }
+  $('formDialog').close()
+  const j = await run('api/mcp/action', { action: editing ? 'edit' : 'add', name, scope, config }, (editing ? 'Save ' : 'Add ') + name, true)
+  if (j?.ok) { S.selected = scope + ':' + name; S.expanded.add(scope); render() }
+})
+
+render()
+reload()
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "browser-pane-images",
+  "version": "0.0.1",
+  "description": "Browse the images you paste into the prompt: chips above the prompt and an Images tab in the browser-pane window that previews them and opens them in your OS viewer",
+  "types": "./types/index.d.ts",
+  "dependencies": ["browser-pane"],
+  "author": {
+    "name": "Sandip Chitale"
+  },
+  "license": "MIT"
+}

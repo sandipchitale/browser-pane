@@ -1,0 +1,19 @@
+{
+  "name": "browser-pane-template",
+  "owner": {
+    "name": "sandipchitale"
+  },
+  "description": "A starter mod for browser-pane, and browser-pane itself, which it needs",
+  "plugins": [
+    {
+      "name": "browser-pane-template",
+      "source": "./",
+      "description": "A starter mod for browser-pane: a tab with a page and a server module"
+    },
+    {
+      "name": "browser-pane",
+      "source": { "source": "github", "repo": "sandipchitale/browser-pane" },
+      "description": "One shared browser window for mods: each mod adds a tab ($.browserPane)"
+    }
+  ]
+}

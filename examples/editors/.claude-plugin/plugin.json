@@ -1,0 +1,10 @@
+{
+  "name": "browser-pane-editors",
+  "version": "0.0.1",
+  "description": "GUI editors as browser-pane tabs: Plugins (plugins and marketplaces), MCP (MCP servers) and Cockpit (this session live). /editors [plugins | mcp | cockpit]",
+  "dependencies": ["browser-pane"],
+  "author": {
+    "name": "Sandip Chitale"
+  },
+  "license": "MIT"
+}

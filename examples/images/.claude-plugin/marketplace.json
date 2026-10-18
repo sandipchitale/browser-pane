@@ -1,0 +1,22 @@
+{
+  "name": "browser-pane-images",
+  "owner": {
+    "name": "sandipchitale"
+  },
+  "description": "Browse the images you paste into the prompt: chips above the prompt and an Images tab in the browser-pane window, and browser-pane itself, which it needs",
+  "plugins": [
+    {
+      "name": "browser-pane-images",
+      "source": "./",
+      "description": "Browse the images you paste into the prompt: chips above the prompt and an Images tab in the browser-pane window"
+    },
+    {
+      "name": "browser-pane",
+      "source": {
+        "source": "github",
+        "repo": "sandipchitale/browser-pane"
+      },
+      "description": "One shared browser window for mods: each mod adds a tab ($.browserPane)"
+    }
+  ]
+}

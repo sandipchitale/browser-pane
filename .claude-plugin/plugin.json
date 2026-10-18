@@ -1,0 +1,10 @@
+{
+  "name": "browser-pane",
+  "version": "0.0.1",
+  "description": "One shared browser window for mods: each mod adds a tab ($.browserPane), and a Guide tab lists them",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Sandip Chitale"
+  },
+  "license": "MIT"
+}

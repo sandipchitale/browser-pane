@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Template</title>
+<!-- browser-pane's client: the window's theme (data-theme, set before paint), Refresh, selection, api(). -->
+<script src="/bp/client.js"></script>
+<style>
+  :root { --bg: #ffffff; --panel: #f6f6f4; --line: #e2e2de; --text: #1f1f1d; --muted: #6b6b66; --accent: #c15f3c; --accent-text: #ffffff; }
+  :root[data-theme="dark"] { --bg: #1b1b1a; --panel: #232322; --line: #373735; --text: #ececea; --muted: #9a9a94; --accent: #d9774f; --accent-text: #1b1b1a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px 32px; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+  section { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; max-width: 760px; }
+  h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  #selected { font-size: 20px; font-weight: 600; color: var(--accent); }
+  pre { margin: 0; font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  button { font: inherit; font-weight: 600; color: var(--accent-text); background: var(--accent); border: 0; border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  ul { margin: 10px 0 0; padding-left: 18px; }
+  code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<h1>Template</h1>
+<p>A starter tab. Run <code>/template &lt;text&gt;</code> in Claude Code and the text shows here; the window's Refresh and Theme icons work on this page too.</p>
+
+<section>
+  <h2>Selected by Claude Code</h2>
+  <div id="selected">Nothing yet</div>
+</section>
+
+<section>
+  <h2>The server module's data</h2>
+  <pre id="data">…</pre>
+</section>
+
+<section>
+  <h2>Notes, kept by the server module</h2>
+  <form id="form">
+    <input id="note" placeholder="Write a note" aria-label="Note" maxlength="200">
+    <button type="submit">Add</button>
+  </form>
+  <ul id="notes"></ul>
+</section>
+
+<script>
+'use strict'
+const $ = id => document.getElementById(id)
+
+function renderNotes(notes) {
+  $('notes').replaceChildren(...notes.map(n => {
+    const li = document.createElement('li')
+    li.textContent = `${n.text} (${new Date(n.at).toLocaleTimeString()})`
+    return li
+  }))
+}
+
+// Read the tab's server module: GET /tab/template/api/info.
+async function refresh() {
+  const info = await (await browserPane.api('info')).json()
+  $('data').textContent = JSON.stringify(info.data, null, 2)
+  renderNotes(info.notes)
+}
+
+// What Claude Code asked this tab to show: $.browserPane.show({ select }).
+browserPane.onSelect(text => {
+  $('selected').textContent = text
+  refresh()
+})
+
+// The window's Refresh icon, while this tab shows.
+browserPane.onRefresh(refresh)
+
+$('form').addEventListener('submit', async event => {
+  event.preventDefault()
+  const text = $('note').value.trim()
+  if (!text) return
+  const r = await browserPane.api('notes', { method: 'POST', body: JSON.stringify({ text }) })
+  if (r.ok) {
+    renderNotes((await r.json()).notes)
+    $('note').value = ''
+  }
+})
+
+refresh()
+</script>
+</body>
+</html>

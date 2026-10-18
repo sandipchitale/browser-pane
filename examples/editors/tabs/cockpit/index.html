@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Cockpit</title>
+<!-- The window's theme (data-theme), Refresh and selection: browser-pane's client. -->
+<script src="/bp/client.js"></script>
+<link rel="stylesheet" href="api/tailwind.css">
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
+<div class="flex h-screen flex-col">
+
+  <header class="border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div class="min-w-0">
+        <h1 class="truncate text-base font-semibold tracking-tight">Session Cockpit <span id="title" class="font-normal text-slate-500 dark:text-slate-400"></span></h1>
+        <p id="sub" class="truncate text-xs text-slate-500 dark:text-slate-400"></p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="live" class="text-xs text-slate-500 dark:text-slate-400"></span>
+      </div>
+    </div>
+  </header>
+
+  <div id="tiles" class="grid grid-cols-2 gap-2 border-b border-slate-200 px-4 py-3 sm:grid-cols-3 lg:grid-cols-5 dark:border-slate-800"></div>
+
+  <div id="meters" class="grid gap-1.5 border-b border-slate-200 px-4 py-3 empty:hidden dark:border-slate-800" aria-label="Usage"></div>
+
+  <div role="tablist" class="flex flex-wrap items-center gap-1 border-b border-slate-200 px-4 dark:border-slate-800">
+    <button role="tab" data-tab="tokens" class="tab -mb-px border-b-2 px-3 py-2 text-sm">Tokens &amp; cost</button>
+    <button role="tab" data-tab="agents" class="tab -mb-px border-b-2 px-3 py-2 text-sm">Agents</button>
+    <button role="tab" data-tab="search" class="tab -mb-px border-b-2 px-3 py-2 text-sm">Search</button>
+  </div>
+
+  <main id="panel" class="min-h-0 flex-1 overflow-y-auto p-4" aria-live="off"></main>
+</div>
+
+<script>
+const $ = id => document.getElementById(id)
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const POLL_MS = 1500
+
+// ---------- formatting ----------
+const fmtN = n => (n ?? 0).toLocaleString('en-US')
+const fmtK = n => (n >= 1e6 ? +(n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? +(n / 1e3).toFixed(1) + 'k' : String(n ?? 0))
+const fmtMs = ms => {
+  if (ms == null) return '…'
+  if (ms < 1000) return Math.round(ms) + ' ms'
+  const s = ms / 1000
+  if (s < 60) return s.toFixed(1) + ' s'
+  const m = Math.floor(s / 60)
+  return m < 60 ? `${m}m ${Math.round(s % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
+const fmtUsd = n => (n == null ? '–' : '$' + n.toFixed(n < 10 ? 3 : 2))
+const fmtTime = ts => (ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '')
+
+// ---------- state ----------
+const TABS = [...document.querySelectorAll('.tab')].map(b => b.dataset.tab)
+const S = { data: null, tab: TABS[0], query: '', hits: null, error: '' }
+// A tab saved before it was removed (Timeline) falls back to the first.
+try { const saved = localStorage.getItem('cockpitTab'); if (TABS.includes(saved)) S.tab = saved } catch (e) {}
+
+async function poll() {
+  try {
+    const res = await fetch('api/cockpit/state')
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    S.data = await res.json()
+    S.error = ''
+  } catch (e) {
+    S.error = String(e.message || e)
+  }
+  render()
+}
+
+// ---------- rendering ----------
+const tile = (label, value, hint = '') => `<div class="rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+  <div class="text-[11px] tracking-wide text-slate-500 uppercase dark:text-slate-400">${esc(label)}</div>
+  <div class="text-lg font-semibold tabular-nums">${esc(value)}</div>${hint ? `<div class="truncate text-[11px] text-slate-500 dark:text-slate-400">${esc(hint)}</div>` : ''}</div>`
+
+// ---------- usage meters: context fill and rate-limit windows (the cost is a tile) ----------
+const RATE_LABELS = { five_hour: '5-hour limit', seven_day: 'Weekly limit', spend_limit: 'Spend limit' }
+const WINDOWS = { five_hour: { ms: 5 * 3_600_000, label: '5h' }, seven_day: { ms: 7 * 86_400_000, label: '7d' } }
+// Each bar keeps its own hue; the percent is green, amber or red by how much is used.
+const BAR_COLORS = { context: 'bg-sky-500', five_hour: 'bg-orange-500', seven_day: 'bg-violet-500', spend_limit: 'bg-emerald-500' }
+const severity = pct => (pct >= 85 ? 'text-rose-600 dark:text-rose-400' : pct >= 60 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400')
+const fmtSpan = ms => {
+  const minutes = Math.max(0, Math.round(ms / 60_000))
+  const days = Math.floor(minutes / 1440), hours = Math.floor((minutes % 1440) / 60), mins = minutes % 60
+  return days > 0 ? `${days}d ${hours}h` : hours > 0 ? `${hours}h ${mins}m` : `${mins}m`
+}
+
+const meter = (key, label, pct, detail) => `<div class="flex items-center gap-3 text-xs">
+  <span class="w-24 shrink-0 text-slate-500 dark:text-slate-400">${esc(label)}</span>
+  <span class="h-2 min-w-16 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800"><span class="block h-full rounded-full ${BAR_COLORS[key] ?? 'bg-slate-400'}" style="width:${Math.min(100, Math.max(0, pct))}%"></span></span>
+  <span class="w-20 shrink-0 text-right font-semibold tabular-nums ${severity(pct)}">${esc(+pct.toFixed(1))}% used</span>
+  <span class="w-72 shrink-0 truncate text-slate-500 dark:text-slate-400">${esc(detail)}</span>
+</div>`
+
+// Until the session has measured the context, the transcript's last call stands in for it.
+function renderMeters(u, transcriptContext) {
+  const now = Date.now()
+  const rows = []
+  const c = u?.context ?? {}
+  if (c.tokens === undefined || c.percent === undefined) {
+    const parts = [transcriptContext ? `${fmtK(transcriptContext)} tokens in the last call` : 'no reply yet']
+    if (c.window) parts.push(`${fmtK(c.window)} token window`)
+    rows.push(`<div class="flex gap-3 text-xs text-slate-500 dark:text-slate-400"><span class="w-24 shrink-0">Context</span><span>${esc(parts.join(' · '))}</span></div>`)
+  } else {
+    rows.push(meter('context', 'Context', c.percent, `${fmtK(c.tokens)} of ${fmtK(c.window)} tokens`))
+  }
+  for (const limit of u?.rateLimits ?? []) {
+    const resetsAt = limit.resetsAt ? Date.parse(limit.resetsAt) : NaN
+    const window = WINDOWS[limit.kind]
+    const parts = []
+    if (!Number.isNaN(resetsAt)) {
+      // How far through the window we are, so the percent used can be read against it.
+      if (window) parts.push(`${fmtSpan(Math.min(window.ms, Math.max(0, window.ms - (resetsAt - now))))} of ${window.label} elapsed`)
+      parts.push(`resets in ${fmtSpan(resetsAt - now)}`)
+    }
+    rows.push(meter(limit.kind, RATE_LABELS[limit.kind] ?? limit.kind, limit.percentUsed, parts.join(' · ')))
+  }
+  return rows.join('')
+}
+
+function renderHeader(d) {
+  $('title').textContent = d.title ? '· ' + d.title : ''
+  $('sub').textContent = [d.model, d.cwd, d.id].filter(Boolean).join(' · ')
+  const running = (d.tools || []).filter(t => t.running).length
+  const stale = !d.liveEvents && d.savedAt && Date.now() - d.savedAt > 120000
+  const note = d.liveEvents ? ` · live feed (${d.liveTurns} newer turn${d.liveTurns === 1 ? '' : 's'} not yet saved)` : stale ? ` · transcript last saved ${Math.round((Date.now() - d.savedAt) / 60000)}m ago` : ''
+  $('live').textContent = S.error ? 'disconnected: ' + S.error : (running ? `● ${running} running` : '● idle') + note
+  $('live').className = 'text-xs ' + (S.error ? 'text-rose-600 dark:text-rose-400' : running ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400')
+  const c = d.cost
+  $('tiles').innerHTML = [
+    // The transcript's cost record when it has one; until then, what the session measured.
+    tile('Cost', fmtUsd(c?.usd ?? d.usage?.cost?.usd), c ? (c.unknown ? 'some models unpriced' : 'from the session') : d.usage?.cost ? 'measured by the session' : 'no cost data yet'),
+    tile('Output', fmtK(d.tokens.output), `${fmtK(d.tokens.cacheRead)} cache read`),
+    tile('Turns', fmtN(d.turns.length), `${fmtN(d.tools.length)} tool calls`),
+    tile('Time', fmtMs(c?.wallMs ?? (d.started && d.last ? Date.parse(d.last) - Date.parse(d.started) : undefined)), c ? `${fmtMs(c.apiMs)} API · ${fmtMs(c.toolMs)} tools` : ''),
+    tile('Lines', c ? `+${fmtN(c.added)} −${fmtN(c.removed)}` : '–', 'added / removed'),
+  ].join('')
+  $('meters').innerHTML = renderMeters(d.usage, d.context)
+}
+
+function renderAgents(d) {
+  if (!d.agents.length) return '<p class="py-10 text-center text-sm text-slate-400">No subagents were launched in this session.</p>'
+  const maxMs = Math.max(1000, ...d.agents.map(a => a.ms || 0))
+  const total = d.agents.reduce((s, a) => s + (a.ms || 0), 0)
+  const rows = d.agents.map(a => `<li class="flex items-center gap-2 border-b border-slate-100 py-1.5 text-sm dark:border-slate-800">
+    <span class="w-20 shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400">${esc(fmtTime(a.ts))}</span>
+    <span class="w-28 shrink-0 truncate rounded bg-fuchsia-500 px-1.5 py-0.5 text-[11px] font-medium text-white">${esc(a.type)}</span>
+    <span class="min-w-0 flex-1 truncate" title="${esc(a.label)}">${esc(a.label)}</span>
+    <span class="w-40 shrink-0"><span class="block h-1.5 rounded ${a.running ? 'animate-pulse bg-emerald-500' : a.ok === false ? 'bg-rose-500' : 'bg-fuchsia-300 dark:bg-fuchsia-700'}" style="width:${a.ms ? Math.max(2, Math.round((a.ms / maxMs) * 100)) : 8}%"></span></span>
+    <span class="w-16 shrink-0 text-right text-[11px] tabular-nums text-slate-500 dark:text-slate-400">${esc(fmtMs(a.ms))}</span></li>`)
+  return `<p class="mb-2 text-xs text-slate-500 dark:text-slate-400">${d.agents.length} subagent${d.agents.length === 1 ? '' : 's'} · ${esc(fmtMs(total))} total (they can overlap)</p><ul>${rows.join('')}</ul>`
+}
+
+// Inline SVG bars: output tokens per turn, context size per turn.
+function bars(values, label, colorClass) {
+  const max = Math.max(1, ...values)
+  const w = 6, gap = 2, h = 70
+  const svg = values.map((v, i) => `<rect x="${i * (w + gap)}" y="${h - Math.round((v / max) * h)}" width="${w}" height="${Math.max(1, Math.round((v / max) * h))}" rx="1"><title>Turn ${i + 1}: ${fmtN(v)}</title></rect>`).join('')
+  return `<figure class="mb-4"><figcaption class="mb-1 text-xs text-slate-500 dark:text-slate-400">${esc(label)} · peak ${esc(fmtK(max))}</figcaption>
+    <div class="overflow-x-auto"><svg width="${Math.max(40, values.length * (w + gap))}" height="${h}" class="${colorClass}" fill="currentColor" role="img" aria-label="${esc(label)}">${svg}</svg></div></figure>`
+}
+
+function renderTokens(d) {
+  const t = d.tokens
+  const models = Object.entries(d.cost?.models || {})
+  const toolRows = d.byTool.map(x => `<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-1 pr-3 font-mono text-xs">${esc(x.name)}</td>
+    <td class="py-1 pr-3 text-right tabular-nums">${fmtN(x.count)}</td><td class="py-1 pr-3 text-right tabular-nums ${x.errors ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}">${x.errors}</td>
+    <td class="py-1 text-right tabular-nums">${esc(fmtMs(x.ms))}</td></tr>`).join('')
+  return `${bars(d.perTurn.map(p => p.output), 'Output tokens per turn', 'text-sky-500')}
+    ${bars(d.perTurn.map(p => p.context), 'Context size at the end of each turn', 'text-violet-500')}
+    <h3 class="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-400">Tokens</h3>
+    <table class="mb-4 text-sm"><tbody>
+      ${[['Input (uncached)', t.input], ['Cache read', t.cacheRead], ['Cache write', t.cacheCreate], ['Output', t.output]].map(([k, v]) => `<tr><td class="pr-6 text-slate-500 dark:text-slate-400">${k}</td><td class="text-right tabular-nums">${fmtN(v)}</td></tr>`).join('')}</tbody></table>
+    ${models.length ? `<h3 class="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-400">Cost by model</h3>
+    <table class="mb-4 w-full max-w-xl text-sm"><thead><tr class="text-left text-xs text-slate-500 dark:text-slate-400"><th>Model</th><th class="text-right">Output</th><th class="text-right">Cache read</th><th class="text-right">Cost</th></tr></thead><tbody>
+      ${models.map(([m, u]) => `<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-1 font-mono text-xs">${esc(m)}</td><td class="text-right tabular-nums">${fmtK(u.outputTokens)}</td><td class="text-right tabular-nums">${fmtK(u.cacheReadInputTokens)}</td><td class="text-right tabular-nums">${fmtUsd(u.costUSD)}</td></tr>`).join('')}</tbody></table>` : ''}
+    <h3 class="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-400">Tools</h3>
+    <table class="w-full max-w-xl text-sm"><thead><tr class="text-left text-xs text-slate-500 dark:text-slate-400"><th>Tool</th><th class="text-right">Calls</th><th class="text-right">Errors</th><th class="text-right">Time</th></tr></thead><tbody>${toolRows}</tbody></table>`
+}
+
+function renderHits() {
+  const hits = S.hits
+  const hit = h => {
+    const a = esc(h.snippet.slice(0, h.at)), b = esc(h.snippet.slice(h.at, h.at + S.query.length)), c = esc(h.snippet.slice(h.at + S.query.length))
+    const tag = h.role === 'tool' ? `<span class="rounded bg-slate-500 px-1.5 py-0.5 text-[11px] text-white">${esc(h.tool)}</span>` : `<span class="rounded px-1.5 py-0.5 text-[11px] text-white ${h.role === 'user' ? 'bg-sky-600' : 'bg-emerald-600'}">${h.role}</span>`
+    return `<li class="border-b border-slate-100 py-2 text-sm dark:border-slate-800"><div class="mb-0.5 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">${tag}<span>Turn ${(h.turn ?? 0) + 1}</span><span>${esc(fmtTime(h.ts))}</span></div>
+      <div class="break-words">${a}<mark class="rounded bg-amber-200 px-0.5 text-slate-900">${b}</mark>${c}</div></li>`
+  }
+  return hits == null ? '<p class="text-sm text-slate-400">Type to search this session.</p>' : hits.length ? `<ul>${hits.map(hit).join('')}</ul>` : '<p class="text-sm text-slate-400">No matches.</p>'
+}
+const renderSearch = () => `<input id="q" type="search" value="${esc(S.query)}" placeholder="Search prompts, replies, tool commands and output…" aria-label="Search the transcript" class="field mt-0 mb-3 max-w-2xl" autocomplete="off">
+  <div id="hits">${renderHits()}</div>`
+
+function render() {
+  const d = S.data
+  document.querySelectorAll('.tab').forEach(b => {
+    const on = b.dataset.tab === S.tab
+    b.setAttribute('aria-selected', on)
+    b.className = 'tab -mb-px border-b-2 px-3 py-2 text-sm ' + (on ? 'border-sky-600 font-semibold text-sky-700 dark:border-sky-400 dark:text-sky-300' : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200')
+  })
+  const panel = $('panel')
+  if (!d || d.empty || d.found === false) {
+    $('tiles').innerHTML = ''
+    $('meters').innerHTML = ''
+    $('live').textContent = S.error ? 'disconnected: ' + S.error : ''
+    panel.innerHTML = `<p class="py-16 text-center text-sm text-slate-500 dark:text-slate-400">${!d ? 'Loading…' : d.empty ? 'No session is attached. Run <code>/cockpit</code> inside Claude Code.' : 'The transcript file for this session was not found yet (it is created after the first message).'}</p>`
+    return
+  }
+  renderHeader(d)
+  // Search keeps its input (and focus) between polls.
+  if (S.tab === 'search') {
+    if (!$('q')) { panel.innerHTML = renderSearch(); $('q').focus() }
+    return
+  }
+  const html = S.tab === 'agents' ? renderAgents(d) : renderTokens(d)
+  if (panel.dataset.last !== S.tab + html) {
+    panel.dataset.last = S.tab + html
+    const keep = panel.scrollTop
+    panel.innerHTML = html
+    panel.scrollTop = keep
+  }
+}
+
+// ---------- events ----------
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
+  S.tab = b.dataset.tab
+  try { localStorage.setItem('cockpitTab', S.tab) } catch (e) {}
+  $('panel').dataset.last = ''
+  $('panel').scrollTop = 0
+  render()
+}))
+let searchTimer
+$('panel').addEventListener('input', e => {
+  if (e.target.id !== 'q') return
+  S.query = e.target.value.trim()
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(async () => {
+    if (!S.query) { S.hits = null } else {
+      try { S.hits = (await (await fetch('api/cockpit/search?q=' + encodeURIComponent(S.query))).json()).hits } catch (err) { S.hits = [] }
+    }
+    if ($('hits')) $('hits').innerHTML = renderHits()
+  }, 200)
+})
+
+poll()
+setInterval(poll, POLL_MS)
+// The window's Refresh button reads the transcript now rather than at the next tick.
+browserPane.onRefresh(poll)
+</script>
+</body>
+</html>

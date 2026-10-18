@@ -1,0 +1,10 @@
+{
+  "name": "browser-pane-template",
+  "version": "0.0.1",
+  "description": "A starter mod for browser-pane: a tab with a page and a server module. Copy it, rename it, and build your own.",
+  "dependencies": ["browser-pane"],
+  "author": {
+    "name": "Sandip Chitale"
+  },
+  "license": "MIT"
+}

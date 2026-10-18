@@ -1,0 +1,22 @@
+{
+  "name": "browser-pane-editors",
+  "owner": {
+    "name": "sandipchitale"
+  },
+  "description": "GUI editors as browser-pane tabs: Plugins, MCP and a live session Cockpit with usage meters, and browser-pane itself, which it needs",
+  "plugins": [
+    {
+      "name": "browser-pane-editors",
+      "source": "./",
+      "description": "GUI editors as browser-pane tabs: Plugins, MCP and a live session Cockpit with usage meters"
+    },
+    {
+      "name": "browser-pane",
+      "source": {
+        "source": "github",
+        "repo": "sandipchitale/browser-pane"
+      },
+      "description": "One shared browser window for mods: each mod adds a tab ($.browserPane)"
+    }
+  ]
+}
